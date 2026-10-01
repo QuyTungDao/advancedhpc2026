@@ -1,0 +1,62 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\title{Labwork 2 Report: Get to Know Your GPU}
+\author{Dao Quy Tung \\ Student ID: 2540109}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+In this labwork, I used the \texttt{numba.cuda} Python library to identify my NVIDIA GPU and inspect its streaming multiprocessor (SM) count and device memory. I also calculated the number of CUDA cores using the SM count and the GPU architecture.
+
+\section{Implementation}
+My script selects CUDA device 0, obtains the memory information from its CUDA context, and reads \texttt{MULTIPROCESSOR\_COUNT}. The GPU has compute capability 8.6. For this GA10x Ampere architecture, each SM has 128 FP32 CUDA cores, so the estimated total is \(\text{SM count}\times128\). This factor is architecture-specific and cannot be used for every GPU.\footnote{NVIDIA, \href{https://images.nvidia.com/aem-dam/en-zz/Solutions/geforce/ampere/pdf/NVIDIA-ampere-GA102-GPU-Architecture-Whitepaper-V1.pdf}{\emph{Ampere GPU Architecture In-Depth}}, p.~13.}
+
+The relevant code is:
+
+\begin{lstlisting}[language=Python,basicstyle=\ttfamily\small,breaklines=true]
+import numba.cuda
+
+device = numba.cuda.select_device(0)
+free, total = numba.cuda.current_context().get_memory_info()
+
+print(f"Device's name: {device.name}")
+print(f"Multiprocessor: {device.MULTIPROCESSOR_COUNT}")
+print(f"Number of cores: {device.MULTIPROCESSOR_COUNT * 128}")
+print(f"Total memory: {total / 1024**3:.2f} GiB")
+print(f"Free memory: {free / 1024**3:.2f} GiB")
+\end{lstlisting}
+
+Dividing bytes by \(1024^3\) gives gibibytes (GiB). The free-memory value is a snapshot and can change between runs.
+
+\section{Results}
+I ran the script on my machine and obtained the following results:
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+Property & Result \\
+\hline
+Selected device ID & 0 \\
+Device name & NVIDIA GeForce RTX 2050 \\
+Streaming multiprocessors & 16 \\
+FP32 CUDA cores per SM & 128 \\
+Estimated total CUDA cores & \(16\times128=2048\) \\
+Total device memory & 4.00 GiB \\
+Free device memory at run time & 3.23 GiB \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Conclusion}
+The script successfully identified my NVIDIA GeForce RTX 2050 and queried its memory and SM count. Its 16 SMs correspond to 2,048 FP32 CUDA cores under the GA10x Ampere architecture. The CUDA context reported 4.00 GiB of total memory, with 3.23 GiB free when I ran the program.
+
+\end{document}
