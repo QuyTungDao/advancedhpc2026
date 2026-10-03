@@ -1,0 +1,127 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=24mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    frame=single
+}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\title{Labwork 4 Report: Threads and 2D CUDA Blocks}
+\author{Dao Quy Tung \\ Student ID: 2540109}
+\date{3 October 2026}
+
+\begin{document}
+\maketitle
+
+\section{Objective}
+For this lab, I started with the grayscale code from Labwork 3 and changed
+the GPU kernel to use 2D blocks.
+I then used \texttt{time.time()} to compare the CPU and GPU running times
+and calculate the speedup.
+
+\section{Implementation}
+I used the same $1200\times600$ RGB image as in Labwork 3,
+\texttt{2021-Road-Race-Grand-Championship.jpg}. The grayscale calculation
+also stays the same: take the average of the three colour values and
+round down to an integer.
+\[
+\mathrm{gray}=\left\lfloor\frac{R+G+B}{3}\right\rfloor.
+\]
+On the CPU, a loop processes the pixels one by one after the image is
+flattened. In both versions, I convert the channel values to integers
+before adding them to avoid 8-bit overflow. The calculated grayscale
+value is then written to all three channels.
+
+In the GPU version, each thread handles one pixel. Its column and row
+are given by \texttt{tidx} and \texttt{tidy}, so the image is accessed as
+\texttt{src[tidy, tidx, channel]}. The \texttt{if} statement checks that
+the pixel is inside the image before reading or writing it.
+\begin{lstlisting}
+@cuda.jit
+def grayscale(src, dst):
+    tidx = cuda.threadIdx.x + cuda.blockIdx.x * cuda.blockDim.x
+    tidy = cuda.threadIdx.y + cuda.blockIdx.y * cuda.blockDim.y
+    if tidy < src.shape[0] and tidx < src.shape[1]:
+        r = int(src[tidy, tidx, 0])
+        g = int(src[tidy, tidx, 1])
+        b = int(src[tidy, tidx, 2])
+        gray = np.uint8((r + g + b) // 3)
+        dst[tidy, tidx, 0] = gray
+        dst[tidy, tidx, 1] = gray
+        dst[tidy, tidx, 2] = gray
+\end{lstlisting}
+
+I used a $16\times16$ block, or 256 threads per block. The grid dimensions
+are rounded up so that the threads cover the whole image. For this input,
+the grid is $75\times38$:
+\begin{lstlisting}
+blockSize = (16, 16)
+gridSize = (
+    (imageWidth + blockSize[0] - 1) // blockSize[0],
+    (imageHeight + blockSize[1] - 1) // blockSize[1],
+)
+\end{lstlisting}
+
+\section{Timing procedure}
+I measured CPU time around the grayscale loop. For the GPU, I first ran
+the kernel once and waited for it to finish with
+\texttt{cuda.synchronize()}. This warm-up keeps the initial compilation
+out of the measured time. I then timed the following part of the program:
+\begin{lstlisting}
+start = time.time()
+devInput = cuda.to_device(image)
+devOutput = cuda.device_array(image.shape, np.uint8)
+grayscale[gridSize, blockSize](devInput, devOutput)
+hostOutput = devOutput.copy_to_host()
+gpuTime = time.time() - start
+\end{lstlisting}
+This measurement includes transferring the input to the GPU, allocating
+the output, running the kernel, and bringing the result back to the CPU.
+The call to \texttt{copy\_to\_host()} waits for the result, so the GPU work
+has finished when the timer stops. Loading the image, saving the PNG
+files, and comparing the outputs are done outside the timed sections.
+I calculated speedup by dividing CPU time by GPU time:
+\[
+S=\frac{T_{\mathrm{CPU}}}{T_{\mathrm{GPU}}}.
+\]
+
+\section{Measured results}
+I ran \texttt{Labwork4.py} on an NVIDIA GeForce RTX 2050 on
+3 October 2026. The results from this run were:
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Measurement & Result \\
+\midrule
+CPU time & 0.856109 s \\
+GPU time, including data transfer & 0.002371 s \\
+Speedup & $361.10\times$ \\
+\texttt{np.array\_equal(hostCPU, hostOutput)} & \texttt{True} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The GPU was faster in this run, with a speedup of $361.10\times$,
+including the time needed to transfer the data. I also compared the
+outputs using \texttt{np.array\_equal}, which returned \texttt{True}.
+This confirms that all 720,000 pixels match in all three channels.
+The two images are saved as \texttt{gray\_cpu.png} and
+\texttt{gray\_gpu.png}.
+
+The speedup is calculated from the full timing values before they are
+rounded for display. These numbers come from a single run with
+$16\times16$ blocks, so the measured times may change on another run.
+
+\end{document}

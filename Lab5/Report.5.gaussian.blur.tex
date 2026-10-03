@@ -1,0 +1,145 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=24mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    frame=single
+}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\title{Labwork 5 Report: Gaussian Blur and Shared Memory}
+\author{Dao Quy Tung \\ Student ID: 2540109}
+\date{3 October 2026}
+
+\begin{document}
+\maketitle
+
+\section{Objective}
+For this lab, I changed the grayscale kernel from Labwork 4 to apply a
+$7\times7$ Gaussian blur. I wrote two versions: one reads the filter from
+global memory, and the other copies the filter into shared memory.
+I used \texttt{time.time()} to compare their running times.
+
+\section{Implementation}
+\subsection{Filter and pixel calculation}
+I used the same $1200\times600$ RGB image,
+\texttt{2021-Road-Race-Grand-Championship.jpg}. The filter contains the
+following integer weights:
+\[
+K=
+\begin{bmatrix}
+0 & 0 & 1 & 2 & 1 & 0 & 0\\
+0 & 3 & 13 & 22 & 13 & 3 & 0\\
+1 & 13 & 59 & 97 & 59 & 13 & 1\\
+2 & 22 & 97 & 159 & 97 & 22 & 2\\
+1 & 13 & 59 & 97 & 59 & 13 & 1\\
+0 & 3 & 13 & 22 & 13 & 3 & 0\\
+0 & 0 & 1 & 2 & 1 & 0 & 0
+\end{bmatrix}.
+\]
+
+Each thread calculates one output pixel. For each colour channel, it
+multiplies the values in the surrounding $7\times7$ area by the filter
+weights and adds them together. The weights sum to 1003, so the final
+value is divided by 1003 using integer division:
+\[
+O_c(y,x)=
+\left\lfloor
+\frac{\displaystyle\sum_{j=0}^{6}\sum_{i=0}^{6}
+K_{j,i}\,I_c(y+j-3,x+i-3)}{1003}
+\right\rfloor.
+\]
+Here, $c$ is the red, green, or blue channel. If a neighbouring position
+falls outside the image, $I_c$ uses the nearest edge pixel. In the code,
+this is done by keeping the row and column coordinates within the valid
+range. The result is stored as \texttt{uint8} in a separate output array.
+
+Both kernels use the 2D indexing from Labwork 4, with
+$16\times16$ blocks and a $75\times38$ grid. Threads outside the image
+do not calculate an output pixel.
+
+\subsection{Shared-memory version}
+In \texttt{gaussian\_blur}, each thread reads the filter weights directly
+from global memory. In \texttt{gaussian\_blur\_shared}, the threads in each
+block first copy the 49 weights into a shared array:
+\begin{lstlisting}
+sharedFilter = cuda.shared.array((7, 7), dtype=int32)
+tid = cuda.threadIdx.x + cuda.threadIdx.y * cuda.blockDim.x
+threadsPerBlock = cuda.blockDim.x * cuda.blockDim.y
+for k in range(tid, 49, threadsPerBlock):
+    sharedFilter[k // 7, k % 7] = weights[k // 7, k % 7]
+
+cuda.syncthreads()
+\end{lstlisting}
+
+The synchronization makes sure the filter has been fully copied before
+any thread uses it. All threads reach this point, including those outside
+the image; the pixel boundary check comes afterwards. The calculation
+then uses \texttt{sharedFilter[j, i]} for each weight. The input image
+stays in global memory, and the blur calculation is the same in both
+versions.
+
+\section{Timing procedure}
+I transferred the image and filter to the GPU and allocated both output
+arrays before measuring time. I then ran each kernel once and called
+\texttt{cuda.synchronize()} to finish the warm-up. The timed sections are:
+\begin{lstlisting}
+start = time.time()
+gaussian_blur[gridSize, blockSize](devInput, devOutput, devFilter)
+cuda.synchronize()
+gpuTime = time.time() - start
+
+start = time.time()
+gaussian_blur_shared[gridSize, blockSize](devInput, devOutputShared, devFilter)
+cuda.synchronize()
+sharedTime = time.time() - start
+\end{lstlisting}
+
+These times cover the kernel launch and the wait for it to finish.
+Memory allocation, transfers between the CPU and GPU, initial
+compilation, and saving the images are outside the timed sections.
+Copying the filter from global to shared memory happens inside the
+shared-memory kernel, so that step is included in its time.
+I calculated speedup as
+\[
+S=\frac{T_{\mathrm{without\ shared}}}{T_{\mathrm{with\ shared}}}.
+\]
+
+\section{Measured results}
+I ran \texttt{Labwork5.py} on an NVIDIA GeForce RTX 2050 on
+3 October 2026. The results from this run were:
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Measurement & Result \\
+\midrule
+GPU without shared memory & 0.000797 s \\
+GPU with shared memory & 0.000735 s \\
+Speedup & $1.08\times$ \\
+\texttt{np.array\_equal(hostOutput, hostOutputShared)} & \texttt{True} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The shared-memory version was slightly faster in this run.
+The output comparison returned \texttt{True}, so both versions produced
+exactly the same values for all 720,000 pixels and all three channels.
+The results are saved as \texttt{blur\_gpu.png} and
+\texttt{blur\_gpu\_shared.png}.
+
+The speedup uses the full timing values before they are rounded for
+display. I measured each version once with $16\times16$ blocks, so this
+result only describes this run; the times may change on another run.
+
+\end{document}
